@@ -4,6 +4,14 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates git ffmpeg tini ripgrep && \
     rm -rf /var/lib/apt/lists/*   
 
+ARG GOG_VERSION=0.29.0
+
+RUN curl -L -o /tmp/gogcli.tar.gz \
+      "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_amd64.tar.gz" \
+ && tar -xzf /tmp/gogcli.tar.gz -C /tmp \
+ && install -m 0755 /tmp/gog /usr/local/bin/gog \
+ && rm -f /tmp/gogcli.tar.gz /tmp/gog
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gnupg && \
     mkdir -p /etc/apt/keyrings && \
