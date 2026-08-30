@@ -2,16 +2,17 @@
 
 ## Architecture
 
-Python/Starlette web server that wraps Hermes Agent's gateway as a managed subprocess.
+Python supervisor that runs the official Hermes dashboard and keeps the messaging gateway alive.
 
-- `server.py` — Main server: HTTP handlers, gateway process manager, basic auth, .env file management
-- `templates/index.html` — Single-page UI with Tailwind CSS + Alpine.js
-- Config is stored as a flat `.env` file at `/data/.hermes/.env` (Hermes uses python-dotenv)
-- Gateway is spawned via `hermes gateway` command with env vars from the .env file
+- `supervisor.py` — PID-1 child: starts the official authenticated dashboard and restarts `hermes gateway` if it exits
+- `server.py` and `templates/index.html` — retained legacy wrapper UI; not used by `start.sh`
+- Hermes state is persistent under `/data/.hermes`
+- The official dashboard listens on `$PORT`; Railway terminates HTTPS
 
 ## Key patterns
 
-- Gateway lifecycle: start/stop/restart via async subprocess, stdout captured to ring buffer
-- Secret masking: password fields show first 8 chars + `***`, merge on save preserves masked values
-- No direct Hermes Python imports — the server manages the .env file independently
-- Auto-start: gateway starts on server boot if any provider API key is configured
+- Dashboard authentication fails closed when no admin password is configured
+- Existing `ADMIN_USERNAME` / `ADMIN_PASSWORD` are mapped to Hermes dashboard Basic Auth
+- Dashboard session signing is stable without logging or persisting the plaintext password
+- The gateway runs in an independent process group and restarts after unexpected exits
+- `/api/health` is the unauthenticated Railway health endpoint

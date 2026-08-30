@@ -26,6 +26,8 @@ RUN node --version && npm --version
 
 RUN git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent && \
     cd /tmp/hermes-agent && \
+    npm --prefix web ci && \
+    npm --prefix web run build && \
     uv pip install --system --no-cache \                                                                  
      -e ".[all]" \                                                                                       
      "python-telegram-bot[webhooks]==22.8" && \ 
@@ -37,6 +39,7 @@ RUN uv pip install --system --no-cache -r /app/requirements.txt
 RUN mkdir -p /data/.hermes
 
 COPY server.py /app/server.py
+COPY supervisor.py /app/supervisor.py
 COPY templates/ /app/templates/
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh

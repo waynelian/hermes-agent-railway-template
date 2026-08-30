@@ -1,78 +1,111 @@
 # Hermes Agent Railway Template
 
-One-click deploy [Hermes Agent](https://github.com/nousresearch/hermes-agent) on [Railway](https://railway.app) with a web-based config UI and status dashboard.
+Deploy [Hermes Agent](https://github.com/nousresearch/hermes-agent) on [Railway](https://railway.app) with the official authenticated Hermes dashboard and a supervised messaging gateway.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/hermes-agent)
 
 ## What you get
 
-- **Web Config UI** — configure LLM providers, messaging channels, tool API keys, and model settings from your browser
-- **Status Dashboard** — monitor gateway state, uptime, provider/channel status, and live logs
-- **Gateway Management** — start, stop, and restart the Hermes gateway from the UI
-- **Basic Auth** — password-protected admin panel
-- **Persistent Storage** — config and data survive container restarts via Railway volume
+- **Official Hermes Dashboard** — profiles, Kanban boards, sessions, skills, configuration, cron jobs, plugins, chat, and system status
+- **Authenticated HTTPS** — Railway terminates HTTPS; Hermes requires username/password authentication on the public bind
+- **Gateway Supervision** — `hermes gateway` restarts after an unexpected exit
+- **Persistent Storage** — configuration, OAuth credentials, sessions, memories, profiles, skills, and Kanban state survive container restarts under `/data`
+- **Fail-Closed Startup** — the service refuses to start without a dashboard password
 
 ## Quick Start
 
 ### Deploy to Railway
 
-1. Click the "Deploy on Railway" button above
-2. Set the `ADMIN_PASSWORD` environment variable (or a random one will be generated and printed to logs)
-3. Attach a volume mounted at `/data`
-4. Open your app URL — you'll be prompted for credentials (default username: `admin`)
-5. Configure at least one LLM provider API key and your messaging channels, then hit Save
-6. Once setup is complete, remove the public endpoint from your Railway service — the web UI is only needed for initial configuration and Hermes operates entirely through its configured channels (Telegram, Discord, Slack, etc.)
+1. Click the "Deploy on Railway" button above or connect this repository to a Railway service.
+2. Set a strong `ADMIN_PASSWORD` Railway variable. Do not use a generated or shared password.
+3. Optionally set `ADMIN_USERNAME`; the default is `admin`.
+4. Attach a persistent volume mounted at `/data`.
+5. Generate a Railway domain for service port `8080`. Railway provides HTTPS automatically.
+6. Open the HTTPS URL and sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
+7. Configure Hermes from the official dashboard.
+
+The dashboard holds high-value access to provider credentials, messages, files, sessions, profiles, and tools. Keep the URL private and protect the Railway account with MFA.
 
 ### Run Locally with Docker
 
 ```bash
 docker build -t hermes-agent .
-docker run --rm -it -p 8080:8080 -e PORT=8080 -e ADMIN_PASSWORD=changeme -v hermes-data:/data hermes-agent
+docker run --rm -it \
+  -p 8080:8080 \
+  -e PORT=8080 \
+  -e ADMIN_USERNAME=admin \
+  -e ADMIN_PASSWORD='replace-with-a-long-random-password' \
+  -v hermes-data:/data \
+  hermes-agent
 ```
 
-Open `http://localhost:8080` and log in with `admin` / `changeme`.
+Open `http://localhost:8080` and sign in with the configured credentials.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8080` | Web server port |
-| `ADMIN_USERNAME` | `admin` | Basic auth username |
-| `ADMIN_PASSWORD` | *(generated)* | Basic auth password. If unset, a random password is generated and printed to stdout |
+| `PORT` | `8080` | Official dashboard port; Railway routes HTTPS traffic here |
+| `ADMIN_USERNAME` | `admin` | Dashboard username |
+| `ADMIN_PASSWORD` | *(required)* | Dashboard password; startup fails if it is absent |
+| `DASHBOARD_SESSION_SECRET` | derived | Optional independent seed for stable signed dashboard sessions |
+| `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` | from `ADMIN_USERNAME` | Optional direct Hermes override |
+| `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` | from `ADMIN_PASSWORD` | Optional direct Hermes override |
+| `HERMES_DASHBOARD_BASIC_AUTH_SECRET` | derived | Optional direct session-signing-secret override |
+| `HERMES_GATEWAY_RESTART_DELAY` | `3` | Seconds before restarting an unexpectedly exited gateway |
 
-All Hermes configuration (LLM providers, messaging channels, tool API keys) is managed through the web UI.
+Secrets stay in Railway variables or the persistent Hermes store. The supervisor does not print dashboard credentials.
 
 ## Architecture
 
+```text
+Railway HTTPS
+    │
+    ▼
+Official Hermes Dashboard ($PORT)
+    ├── authenticated web UI
+    ├── Profiles and Kanban
+    ├── Sessions, skills, cron, plugins, and config
+    └── /api/health (Railway health check)
+
+supervisor.py
+    ├── official dashboard process
+    └── hermes gateway process (automatic restart)
+
+/data/.hermes
+    └── persistent config, credentials, sessions, profiles, skills, memory, and Kanban state
 ```
-Railway Container
-├── Python Web Server (Starlette + uvicorn)
-│   ├── / — Config editor + status dashboard
-│   ├── /health — Health check (no auth)
-│   └── /api/* — Config, status, logs, gateway control
-└── hermes gateway — managed as async subprocess
+
+`tini` runs `/app/start.sh`, which executes `supervisor.py`. The dashboard is the critical process. If it exits, the service exits and Railway applies its restart policy. The gateway runs in its own process group and is restarted by the supervisor after an unexpected exit.
+
+## Authentication behavior
+
+The dashboard binds to `0.0.0.0`, which makes Hermes engage its public-dashboard authentication gate. The supervisor maps the existing Railway admin credentials to the official Hermes Basic Auth provider:
+
+- `ADMIN_USERNAME` → `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`
+- `ADMIN_PASSWORD` → `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`
+
+A stable HMAC signing secret is derived without logging or storing the plaintext password in `config.yaml`. Set `DASHBOARD_SESSION_SECRET` when you want an independent session-signing seed.
+
+## Health and verification
+
+Railway checks:
+
+```text
+GET /api/health
 ```
 
-The web server runs on `$PORT` and manages the Hermes gateway as a child process. Gateway stdout/stderr is captured into a ring buffer and viewable in the dashboard.
+Expected response includes `"ok": true` and `"auth_required": true`.
 
-## API Endpoints
+After deployment, verify:
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/` | Yes | Web UI |
-| `GET` | `/health` | No | Health check |
-| `GET` | `/api/config` | Yes | Get config (secrets masked) |
-| `PUT` | `/api/config` | Yes | Save config |
-| `GET` | `/api/status` | Yes | Gateway, provider, channel status |
-| `GET` | `/api/logs` | Yes | Recent gateway log lines |
-| `POST` | `/api/gateway/start` | Yes | Start gateway |
-| `POST` | `/api/gateway/stop` | Yes | Stop gateway |
-| `POST` | `/api/gateway/restart` | Yes | Restart gateway |
+1. `/` redirects to `/login` when no session exists.
+2. Invalid credentials are rejected.
+3. Valid credentials open the dashboard.
+4. Profiles and the intended Kanban board appear.
+5. `hermes gateway` is running and the messaging channel responds.
+6. A gateway exit is followed by an automatic restart.
 
-## Supported Providers
+## Legacy wrapper UI
 
-OpenRouter, DeepSeek, DashScope, GLM/Z.AI, Kimi, MiniMax, Hugging Face
-
-## Supported Channels
-
-Telegram, Discord, Slack, WhatsApp, Email, Mattermost, Matrix
+`server.py` and `templates/index.html` remain in the repository for migration reference. `start.sh` no longer runs the legacy Starlette wrapper. The official Hermes dashboard is the supported web interface.
