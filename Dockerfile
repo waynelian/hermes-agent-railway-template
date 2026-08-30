@@ -29,7 +29,7 @@ RUN git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /tmp/he
     npm ci --workspace web --include-workspace-root --no-audit --fetch-retries=5 && \
     npm run build --workspace web && \
     uv pip install --system --no-cache \                                                                  
-     -e ".[all]" \                                                                                       
+     -e ".[all,voice]" \                                                                                       
      "python-telegram-bot[webhooks]==22.8" && \ 
     rm -rf /tmp/hermes-agent/.git
 
