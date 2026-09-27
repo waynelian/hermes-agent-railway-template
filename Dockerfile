@@ -33,20 +33,22 @@ RUN git init . \
  && test "$(git rev-parse HEAD)" = "${HERMES_COMMIT}"
 
 # PM reads this checkout's pinned tools. No browser packages are requested.
+# uv is internal PM tooling: ensured for dependency preparation, never on PATH.
 RUN python - <<'PY'
+import shutil
 from pathlib import Path
-from pm import ensure, installed_package, stage_manager_runtime
+from pm import ensure, env_for, installed_package, stage_manager_runtime
 from scripts.bundles.payload import seal_pm_runtime
 root = Path('/usr/local/lib/hermes-agent')
 for name in ('python', 'uv', 'node', 'npm', 'ffmpeg', 'ripgrep', 'tirith'):
     ensure(name, explicit=True)
 for command, package in (
     ('hermes-python', 'python'), ('node', 'node'), ('npm', 'npm'),
-    ('uv', 'uv'), ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'), ('tirith', 'tirith'),
+    ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'), ('tirith', 'tirith'),
 ):
     Path('/usr/local/bin', command).symlink_to(installed_package(package).binary)
 Path('/usr/local/bin/ffprobe').symlink_to(installed_package('ffmpeg').binary.with_name('ffprobe'))
-Path('/usr/local/bin/npx').symlink_to(installed_package('npm').binary.with_name('npx'))
+Path('/usr/local/bin/npx').symlink_to(shutil.which('npx', path=env_for('npm', base_env={})['PATH']))
 python = Path('/usr/local/bin/hermes-python').resolve()
 stage_manager_runtime(python=python, destination=root / 'pm-runtime', project=root / 'pm')
 seal_pm_runtime(root, python)
@@ -134,18 +136,20 @@ ENV HOME=/data \
 COPY --from=build /usr/local/lib/hermes-agent /usr/local/lib/hermes-agent
 COPY --from=build /usr/local/bin/gog /usr/local/bin/gog
 
-# Re-create links rather than relying on COPY's symlink handling.
+# Re-create links rather than relying on COPY's symlink handling. PM is
+# stdlib-only, so the base interpreter runs it before hermes-python exists.
 WORKDIR /usr/local/lib/hermes-agent
-RUN .venv/bin/python - <<'PY'
+RUN python - <<'PY'
+import shutil
 from pathlib import Path
-from pm import installed_package
+from pm import env_for, installed_package
 for command, package in (
     ('hermes-python', 'python'), ('node', 'node'), ('npm', 'npm'),
-    ('uv', 'uv'), ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'), ('tirith', 'tirith'),
+    ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'), ('tirith', 'tirith'),
 ):
     Path('/usr/local/bin', command).symlink_to(installed_package(package).binary)
 Path('/usr/local/bin/ffprobe').symlink_to(installed_package('ffmpeg').binary.with_name('ffprobe'))
-Path('/usr/local/bin/npx').symlink_to(installed_package('npm').binary.with_name('npx'))
+Path('/usr/local/bin/npx').symlink_to(shutil.which('npx', path=env_for('npm', base_env={})['PATH']))
 PY
 
 COPY supervisor.py start.sh /app/
