@@ -6,6 +6,11 @@ RUN test "$(dpkg --print-architecture)" = amd64 \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git tini xz-utils libatomic1 libgomp1 libstdc++6 \
+ && apt-get install -y --no-install-recommends \
+      libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 \
+      libcups2t64 libdbus-1-3 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 \
+      libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
+      fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
@@ -32,7 +37,8 @@ RUN git init . \
  && git checkout --detach FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "${HERMES_COMMIT}"
 
-# PM reads this checkout's pinned tools. No browser packages are requested.
+# PM reads this checkout's pinned tools. Chromium and agent-browser land in the
+# image's tool store (not the /data volume) for the Browser Use CLI backend.
 # uv is internal PM tooling: ensured for dependency preparation, never on PATH.
 RUN python - <<'PY'
 import shutil
@@ -40,7 +46,7 @@ from pathlib import Path
 from pm import ensure, env_for, installed_package, stage_manager_runtime
 from scripts.bundles.payload import seal_pm_runtime
 root = Path('/usr/local/lib/hermes-agent')
-for name in ('python', 'uv', 'node', 'npm', 'ffmpeg', 'ripgrep', 'tirith'):
+for name in ('python', 'uv', 'node', 'npm', 'ffmpeg', 'ripgrep', 'tirith', 'chromium', 'agent-browser'):
     ensure(name, explicit=True)
 for command, package in (
     ('hermes-python', 'python'), ('node', 'node'), ('npm', 'npm'),
@@ -131,6 +137,7 @@ ENV HOME=/data \
     HERMES_BIN=/usr/local/bin/hermes \
     HERMES_WEB_DIST=/usr/local/lib/hermes-agent/hermes_cli/web_dist \
     HERMES_TUI_DIR=/usr/local/lib/hermes-agent/ui-tui \
+    PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/hermes-agent/tools \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -166,7 +173,21 @@ RUN HERMES_HOME=/opt/build-check /usr/local/bin/hermes --version \
  && test -s ui-tui/dist/entry.js \
  && test -x .hermes/bin/hermes \
  && test -x .hermes/bin/hermes-acp \
- && gog --version
+ && gog --version \
+ && python - <<'PY'
+import subprocess
+from pm import installed_package
+agent_browser = installed_package('agent-browser')
+chromium = installed_package('chromium')
+assert agent_browser and agent_browser.binary.is_file(), 'agent-browser missing'
+assert chromium and chromium.binary.is_file(), 'chromium missing'
+dom = subprocess.run([str(chromium.binary), '--headless', '--no-sandbox', '--disable-gpu',
+                      '--disable-dev-shm-usage', '--dump-dom',
+                      'data:text/html,<title>hermes-ok</title>'],
+                     capture_output=True, text=True, timeout=60)
+assert 'hermes-ok' in dom.stdout, dom.stderr[-2000:]
+print('Chromium headless OK:', chromium.binary)
+PY
 
 WORKDIR /data
 ENTRYPOINT ["tini", "--"]
