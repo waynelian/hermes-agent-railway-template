@@ -97,9 +97,10 @@ stamp['runtimeDir'] = str(root / 'tools')
 (root / 'install-stamp.json').write_text(json.dumps(stamp) + '\n')
 (root / '.install_method').write_text('docker\n')
 assemble_image(root)
-# Preserve the target of existing /data/.local/bin/hermes wrappers.
+# Preserve the targets of existing /data/.local/bin/hermes{,-acp} wrappers.
 (root / '.hermes/bin').mkdir(parents=True, exist_ok=True)
-(root / '.hermes/bin/hermes').symlink_to('../../libexec/hermes')
+for command in ('hermes', 'hermes-acp'):
+    (root / '.hermes/bin' / command).symlink_to(f'../../libexec/{command}')
 # Fetch archives and build-only source metadata do not enter the final image.
 for p in (root / 'tools').glob('fetch-*'):
     if p.is_dir():
@@ -164,6 +165,7 @@ RUN HERMES_HOME=/opt/build-check /usr/local/bin/hermes --version \
  && test -s hermes_cli/web_dist/index.html \
  && test -s ui-tui/dist/entry.js \
  && test -x .hermes/bin/hermes \
+ && test -x .hermes/bin/hermes-acp \
  && gog --version
 
 WORKDIR /data
