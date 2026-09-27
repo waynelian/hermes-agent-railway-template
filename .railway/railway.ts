@@ -9,7 +9,7 @@ export default defineRailway(() => {
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     start: "tini -- /app/start.sh",
     healthcheck: "/api/health",
-    deploy: { restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 10 },
+    // railway.toml's ON_FAILURE / 10 retries restart policy is Railway's default.
     replicas: { "asia-southeast1-eqsg3a": 1 },
     volumeMounts: { "/data": hermesAgentVolume },
     env: { ADMIN_PASSWORD: preserve(), ADMIN_USERNAME: preserve(), ELEVENLABS_API_KEY: preserve(), GITHUB_TOKEN: preserve(), GOG_KEYRING_BACKEND: preserve(), GOG_KEYRING_PASSWORD: preserve(), GOOGLE_SAFE_BROWSING_KEY: preserve(), PORT: preserve(), UV_LINK_MODE: preserve() },
