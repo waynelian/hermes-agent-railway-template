@@ -1,0 +1,70 @@
+name: Validate Railway image
+
+on:
+  push:
+    branches: [build/hermes-image]
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - supervisor.py
+      - start.sh
+      - .github/workflows/validate-railway-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned image (no production credentials)
+        run: docker build --platform linux/amd64 --progress=plain -t hermes-railway:check .
+      - name: Check a fresh mounted data directory
+        run: |
+          docker run --rm --mount type=tmpfs,destination=/data \
+            --entrypoint /usr/local/bin/hermes hermes-railway:check --version
+          docker run --rm --mount type=tmpfs,destination=/data \
+            --entrypoint /usr/local/lib/hermes-agent/.venv/bin/python \
+            hermes-railway:check -c "import telegram, fastapi, uvicorn; print('Runtime imports OK')"
+      - name: Start the supervisor and check dashboard health
+        shell: python
+        run: |
+          import json
+          import os
+          import secrets
+          import subprocess
+          import time
+          import urllib.request
+          env = os.environ.copy()
+          # Throwaway dashboard password; no bot token, API key or real data.
+          env['ADMIN_PASSWORD'] = secrets.token_urlsafe(32)
+          name = 'hermes-railway-smoke'
+          subprocess.run([
+              'docker', 'run', '-d', '--name', name,
+              '--mount', 'type=tmpfs,destination=/data',
+              '-p', '127.0.0.1:18080:8080',
+              '-e', 'ADMIN_PASSWORD', '-e', 'ADMIN_USERNAME=ci-check',
+              '-e', 'PORT=8080', 'hermes-railway:check',
+          ], env=env, check=True)
+          try:
+              deadline = time.monotonic() + 120
+              while True:
+                  try:
+                      with urllib.request.urlopen('http://127.0.0.1:18080/api/health', timeout=5) as r:
+                          assert r.status == 200
+                      print('Dashboard health endpoint returned HTTP 200')
+                      break
+                  except Exception:
+                      state = subprocess.check_output([
+                          'docker', 'inspect', '--format', '{{json .State}}', name,
+                      ], text=True)
+                      if not json.loads(state)['Running'] or time.monotonic() >= deadline:
+                          subprocess.run(['docker', 'logs', name], check=False)
+                          raise
+                      time.sleep(2)
+          finally:
+              subprocess.run(['docker', 'rm', '-f', name], check=False)

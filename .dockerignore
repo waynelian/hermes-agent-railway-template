@@ -1,0 +1,7 @@
+# Only these files are needed from this Railway-template repository.
+# Hermes source is fetched separately at the pinned commit during the build.
+**
+!Dockerfile
+!.dockerignore
+!supervisor.py
+!start.sh
