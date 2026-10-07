@@ -30,6 +30,8 @@ Python supervisor that runs the official Hermes dashboard and keeps the messagin
 ## Volume gotchas (/data)
 
 - Hermes prefers an environment recorded in `/data/.hermes/installs/<key>/facts.json` over the image `.venv` (the key comes from the install path). If `/proc/<pid>/maps` shows `.so` files loaded from `/data/.hermes/installs/…`, move `installs` aside and restart
+- Never run `hermes pm repair` in the container: it records a ~1.7 GB environment in `installs/<key>` that takes over on the next restart. Undo by removing `installs/<key>/facts.json` and `environments/` before restarting
+- Dashboard action buttons (Backup, gateway restart) refuse with "no dependency environment is committed": `runtime_command()` launches PM's bare store Python, which needs a recorded environment. Back up with `railway ssh -- hermes backup` (CLI uses the image `.venv`; zip lands in `/data`)
 - A stale `/data/.hermes/hermes-agent` git checkout makes `hermes --version` report the wrong upstream. It should not exist
 - The Browser Use CLI (`browser-use==0.13.10`) lives in `/data/.hermes/environments/browser-use` by Hermes design. Reinstall with `tools.browser_use_cli.install_cli()` after an image Python change
 - `browser.backend` is unset: Hermes uses Browser Use (`browser_exec`) when the CLI exists, otherwise its built-in browser tools
