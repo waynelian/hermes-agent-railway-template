@@ -2,7 +2,8 @@ name: Validate Railway image
 
 on:
   push:
-    branches: [build/hermes-image, upgrade/hermes-v0.22.5]
+    # The upgrade now has a PR; its pull_request run avoids duplicate builds.
+    branches: [build/hermes-image]
   pull_request:
     paths:
       - Dockerfile

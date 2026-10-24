@@ -147,6 +147,24 @@ def metadata(home):
     return data
 
 
+def verify_python_sources(target):
+    """The loader imports every top-level Python file, including ignored files.
+
+    A clean tracked tree alone is insufficient; installer sidecars and ordinary
+    __pycache__ artifacts may exist, but every source file must belong to Git.
+    """
+    proc = subprocess.run(['git', '-C', str(target), 'ls-files', '-z', '--', '*.py'],
+                          capture_output=True, text=True, timeout=30)
+    require(proc.returncode == 0, 'plugin-source-inventory-failed')
+    tracked = set(proc.stdout.split('\0')) - {''}
+    for path in target.rglob('*.py'):
+        relative = path.relative_to(target)
+        if '.git' in relative.parts:
+            continue
+        require(relative.as_posix() in tracked and not path.is_symlink()
+                and path.resolve().is_relative_to(target), 'unreviewed-plugin-python-source')
+
+
 def private_write(path, data):
     with path.open('xb') as stream:
         os.fchmod(stream.fileno(), 0o600)
@@ -272,6 +290,7 @@ class Runtime:
         for args, expected_output in ((['rev-parse', 'HEAD'], entry.sha), (['status', '--porcelain', '--untracked-files=no'], '')):
             proc = subprocess.run(['git', '-C', str(target), *args], capture_output=True, text=True, timeout=30)
             require(proc.returncode == 0 and proc.stdout.strip() == expected_output, 'plugin-git-revision-or-tree-mismatch')
+        verify_python_sources(target)
         found = find_provider_dir('holographic')
         require(found is not None and found.resolve() == target, 'provider-resolution-mismatch')
 

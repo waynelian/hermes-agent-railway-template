@@ -272,6 +272,7 @@ class Fixture(unittest.TestCase):
                    'plugins.memory': types.SimpleNamespace(find_provider_dir=Mock(
                        return_value=self.home / 'plugins/holographic'))}
         responses = [types.SimpleNamespace(returncode=0, stdout=entry.sha + '\n'),
+                     types.SimpleNamespace(returncode=0, stdout=''),
                      types.SimpleNamespace(returncode=0, stdout='')]
         runtime = boot.Runtime(self.home, self.source)
         with patch.dict('sys.modules', modules), patch.object(boot.subprocess, 'run', side_effect=responses):
@@ -282,6 +283,25 @@ class Fixture(unittest.TestCase):
             with self.assertRaisesRegex(boot.PreparationError, 'provenance-mismatch'):
                 runtime.verify_install(entry)
             run.assert_not_called()
+
+    def test_untracked_and_ignored_python_sources_are_rejected(self):
+        target = self.home / 'plugins/holographic'
+        target.mkdir()
+        boot.subprocess.run(['git', 'init', '-q', str(target)], check=True)
+        (target / '__init__.py').write_text('# pinned fixture source\n')
+        (target / '.gitignore').write_text('ignored.py\n__pycache__/\n')
+        boot.subprocess.run(['git', '-C', str(target), 'add', '__init__.py', '.gitignore'], check=True)
+        (target / '.hermes-catalog.json').write_text('{}')
+        (target / '__pycache__').mkdir()
+        (target / '__pycache__/fixture.pyc').write_bytes(b'cache-fixture')
+        boot.verify_python_sources(target)
+        for name in ('extra.py', 'ignored.py'):
+            extra = target / name
+            extra.write_text('raise RuntimeError("Must never be imported")\n')
+            with self.assertRaisesRegex(boot.PreparationError, 'unreviewed-plugin-python-source'):
+                boot.verify_python_sources(target)
+            # Keep fixture evidence out of the loader namespace between cases.
+            extra.rename(target / (name + '.fixture'))
 
     def test_catalog_uses_canonical_repository_url(self):
         directory = self.source / 'plugin-catalog'
