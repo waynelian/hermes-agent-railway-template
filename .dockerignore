@@ -5,3 +5,4 @@
 !.dockerignore
 !supervisor.py
 !start.sh
+!prepare_holographic.py
