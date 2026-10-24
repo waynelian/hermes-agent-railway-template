@@ -14,7 +14,7 @@ RUN test "$(dpkg --print-architecture)" = amd64 \
  && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
-ARG HERMES_COMMIT=41755854adfd96e2871badefdec7993f62324481
+ARG HERMES_COMMIT=bf0203a794a07aac3ff764972ab9087baa4e4f4e
 ARG GOG_VERSION=0.29.0
 ENV HOME=/opt/build-home \
     HERMES_HOME=/opt/build-home/.hermes \
@@ -46,11 +46,11 @@ from pathlib import Path
 from pm import ensure, env_for, installed_package, stage_manager_runtime
 from scripts.bundles.payload import seal_pm_runtime
 root = Path('/usr/local/lib/hermes-agent')
-for name in ('python', 'uv', 'node', 'npm', 'ffmpeg', 'ripgrep', 'tirith', 'chromium', 'agent-browser'):
+for name in ('python', 'uv', 'node', 'npm', 'ffmpeg', 'ripgrep', 'chromium', 'agent-browser'):
     ensure(name, explicit=True)
 for command, package in (
     ('hermes-python', 'python'), ('node', 'node'), ('npm', 'npm'),
-    ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'), ('tirith', 'tirith'),
+    ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'),
 ):
     Path('/usr/local/bin', command).symlink_to(installed_package(package).binary)
 Path('/usr/local/bin/ffprobe').symlink_to(installed_package('ffmpeg').binary.with_name('ffprobe'))
@@ -67,7 +67,7 @@ RUN hermes-python -m pm.build_env \
       --source /usr/local/lib/hermes-agent \
       --python /usr/local/bin/hermes-python \
       --out /usr/local/lib/hermes-agent/.venv \
-      --no-install-project --sealed \
+      --no-install-project --sealed --record-selection \
       --extra all --extra acp --extra computer-use --extra doc-extract \
       --extra google --extra telegram --extra tts-premium --extra vertex \
       --extra vision --extra voice --extra web --extra wecom --extra youtube
@@ -87,15 +87,15 @@ RUN .venv/bin/python - <<'PY'
 import json
 import os
 import shutil
-import tomllib
+
 from pathlib import Path
 from docker.build_agent import assemble_image
 from scripts.write_install_stamp import build_stamp
 root = Path('/usr/local/lib/hermes-agent')
 shutil.copytree('/opt/products/tui', root / 'ui-tui', dirs_exist_ok=True)
 shutil.copytree('/opt/products/web', root / 'hermes_cli/web_dist', dirs_exist_ok=True)
-version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
-stamp = build_stamp(commit=os.environ['HERMES_COMMIT'], base_version=version,
+stamp = build_stamp(commit=os.environ['HERMES_COMMIT'], base_version='0.22.5',
+                    display_version='0.22.5', distance=0,
                     dirty=False, source='docker', distribution='docker',
                     update_mechanism='external')
 stamp['pmRuntime'] = str(root / 'pm-runtime')
@@ -133,7 +133,7 @@ FROM base AS runtime
 ENV HOME=/data \
     HERMES_HOME=/data/.hermes \
     HERMES_RUNTIME_DIR=/usr/local/lib/hermes-agent/tools \
-    HERMES_PYTHON=/usr/local/bin/hermes-python \
+    HERMES_PYTHON=/usr/local/lib/hermes-agent/.venv/bin/python \
     HERMES_BIN=/usr/local/bin/hermes \
     HERMES_WEB_DIST=/usr/local/lib/hermes-agent/hermes_cli/web_dist \
     HERMES_TUI_DIR=/usr/local/lib/hermes-agent/ui-tui \
@@ -153,14 +153,29 @@ from pathlib import Path
 from pm import env_for, installed_package
 for command, package in (
     ('hermes-python', 'python'), ('node', 'node'), ('npm', 'npm'),
-    ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'), ('tirith', 'tirith'),
+    ('ffmpeg', 'ffmpeg'), ('rg', 'ripgrep'),
 ):
     Path('/usr/local/bin', command).symlink_to(installed_package(package).binary)
 Path('/usr/local/bin/ffprobe').symlink_to(installed_package('ffmpeg').binary.with_name('ffprobe'))
 Path('/usr/local/bin/npx').symlink_to(shutil.which('npx', path=env_for('npm', base_env={})['PATH']))
 PY
 
-COPY supervisor.py start.sh /app/
+# Immutable image identity must be outside the writable /data mount.
+RUN python - <<'PY'
+import json
+from pathlib import Path
+root = Path('/usr/local/lib/hermes-agent')
+stamp = json.loads((root / 'install-stamp.json').read_text())
+marker = Path('/etc/hermes/image-provenance.json')
+marker.parent.mkdir(parents=True, exist_ok=True)
+marker.write_text(json.dumps({
+    'schema': 1, 'deployment_kind': 'image', 'manager': 'docker',
+    'version': stamp['displayVersion'], 'revision': stamp['commit'],
+}, sort_keys=True) + '\n')
+marker.chmod(0o444)
+PY
+
+COPY supervisor.py start.sh prepare_holographic.py /app/
 RUN ln -s /usr/local/lib/hermes-agent/libexec/hermes /usr/local/bin/hermes \
  && chmod +x /app/start.sh \
  && mkdir -p /data/.hermes
@@ -168,8 +183,18 @@ RUN ln -s /usr/local/lib/hermes-agent/libexec/hermes /usr/local/bin/hermes \
 WORKDIR /usr/local/lib/hermes-agent
 # Build-time smoke checks: no production config, bot token, or mounted volume.
 RUN HERMES_HOME=/opt/build-check /usr/local/bin/hermes --version \
- && .venv/bin/python -c "import telegram, fastapi, uvicorn; print('Telegram and dashboard imports OK')" \
- && test -s hermes_cli/web_dist/index.html \
+ && .venv/bin/python -c "import telegram, fastapi, uvicorn; print('Telegram and dashboard imports OK')"
+# Refuse an image whose actual application interpreter uses unsafe SQLite.
+RUN .venv/bin/python - <<'PY'
+import sqlite3
+assert sqlite3.sqlite_version_info >= (3, 51, 3), f'Unsafe SQLite {sqlite3.sqlite_version}'
+with sqlite3.connect(':memory:') as db:
+    db.execute("CREATE VIRTUAL TABLE docs USING fts5(content, tokenize='trigram')")
+    db.execute("INSERT INTO docs VALUES ('hermes')")
+    assert db.execute("SELECT count(*) FROM docs WHERE docs MATCH 'erm'").fetchone()[0] == 1
+print('Application SQLite and FTS5 trigram OK:', sqlite3.sqlite_version)
+PY
+RUN test -s hermes_cli/web_dist/index.html \
  && test -s ui-tui/dist/entry.js \
  && test -x .hermes/bin/hermes \
  && test -x .hermes/bin/hermes-acp \

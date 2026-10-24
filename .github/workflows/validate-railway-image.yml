@@ -2,6 +2,7 @@ name: Validate Railway image
 
 on:
   push:
+    # The upgrade now has a PR; its pull_request run avoids duplicate builds.
     branches: [build/hermes-image]
   pull_request:
     paths:
@@ -9,6 +10,10 @@ on:
       - .dockerignore
       - supervisor.py
       - start.sh
+      - test_supervisor.py
+      - prepare_holographic.py
+      - test_prepare_holographic.py
+      - verify_holographic_migration.py
       - .github/workflows/validate-railway-image.yml
   workflow_dispatch:
 
@@ -21,8 +26,17 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Test supervisor without production services
+        run: python3 -m unittest -v test_supervisor.py
       - name: Build pinned image (no production credentials)
         run: docker build --platform linux/amd64 --progress=plain -t hermes-railway:check .
+      - name: Test pre-start migration safeguards in the image
+        run: |
+          docker run --rm --mount type=tmpfs,destination=/data \
+            --mount "type=bind,source=$PWD,target=/candidate,readonly" \
+            --workdir /candidate \
+            --entrypoint /usr/local/lib/hermes-agent/.venv/bin/python \
+            hermes-railway:check -B -m unittest -v test_prepare_holographic.py
       - name: Check a fresh mounted data directory
         run: |
           docker run --rm --mount type=tmpfs,destination=/data \
@@ -30,6 +44,16 @@ jobs:
           docker run --rm --mount type=tmpfs,destination=/data \
             --entrypoint /usr/local/lib/hermes-agent/.venv/bin/python \
             hermes-railway:check -c "import telegram, fastapi, uvicorn, faster_whisper; print('Runtime imports OK')"
+      - name: Install pinned Holographic and measure isolated migration
+        timeout-minutes: 20
+        run: |
+          docker run --rm \
+            --tmpfs /data:rw,exec,size=4294967296 \
+            --mount "type=bind,source=$PWD/verify_holographic_migration.py,target=/opt/verify_holographic_migration.py,readonly" \
+            -e HERMES_HOME=/data/ci-holographic/.hermes \
+            -e HOME=/data/ci-holographic \
+            --entrypoint /usr/local/lib/hermes-agent/.venv/bin/python \
+            hermes-railway:check /opt/verify_holographic_migration.py
       - name: Start the supervisor and check dashboard health
         shell: python
         run: |
