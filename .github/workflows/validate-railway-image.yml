@@ -10,6 +10,7 @@ on:
       - supervisor.py
       - start.sh
       - test_supervisor.py
+      - verify_holographic_migration.py
       - .github/workflows/validate-railway-image.yml
   workflow_dispatch:
 
@@ -33,6 +34,16 @@ jobs:
           docker run --rm --mount type=tmpfs,destination=/data \
             --entrypoint /usr/local/lib/hermes-agent/.venv/bin/python \
             hermes-railway:check -c "import telegram, fastapi, uvicorn, faster_whisper; print('Runtime imports OK')"
+      - name: Install pinned Holographic and measure isolated migration
+        timeout-minutes: 20
+        run: |
+          docker run --rm \
+            --tmpfs /data:rw,exec,size=4294967296 \
+            --mount "type=bind,source=$PWD/verify_holographic_migration.py,target=/opt/verify_holographic_migration.py,readonly" \
+            -e HERMES_HOME=/data/ci-holographic/.hermes \
+            -e HOME=/data/ci-holographic \
+            --entrypoint /usr/local/lib/hermes-agent/.venv/bin/python \
+            hermes-railway:check /opt/verify_holographic_migration.py
       - name: Start the supervisor and check dashboard health
         shell: python
         run: |
