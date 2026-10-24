@@ -2,13 +2,14 @@ name: Validate Railway image
 
 on:
   push:
-    branches: [build/hermes-image]
+    branches: [build/hermes-image, upgrade/hermes-v0.22.5]
   pull_request:
     paths:
       - Dockerfile
       - .dockerignore
       - supervisor.py
       - start.sh
+      - test_supervisor.py
       - .github/workflows/validate-railway-image.yml
   workflow_dispatch:
 
@@ -21,6 +22,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Test supervisor without production services
+        run: python3 -m unittest -v test_supervisor.py
       - name: Build pinned image (no production credentials)
         run: docker build --platform linux/amd64 --progress=plain -t hermes-railway:check .
       - name: Check a fresh mounted data directory
