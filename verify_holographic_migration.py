@@ -439,7 +439,12 @@ def integration(report):
     entry = catalog_entry()
     baseline_venv = selected_venv(SOURCE)
     report['baseline_venv'] = str(baseline_venv)
-    require(ensure_installed(entry), 'Fresh fixture did not perform real catalog admission')
+    # Exercise the exact production pre-start script, not a parallel test-only
+    # installer. Its checkpoint and real PM admission must finish before launch.
+    subprocess.run([str(SOURCE / '.venv/bin/python'), '-B', '/app/prepare_holographic.py'],
+                   check=True, timeout=900)
+    require(ensure_installed(entry) is False, 'Pre-start script did not publish the pinned provider')
+    report['production_boot_preparation'] = 'passed'
     report['install'] = check_install(entry)
     selected = selected_venv(SOURCE)
     require(selected != baseline_venv and selected.resolve().is_relative_to(HOME),
@@ -452,6 +457,8 @@ def integration(report):
     before = {path.name for path in generations.iterdir()}
     cfg_stat = (selected / 'pyvenv.cfg').stat()
     metadata_before = (HOME / 'plugins/.install-metadata.json').read_bytes()
+    subprocess.run([str(SOURCE / '.venv/bin/python'), '-B', '/app/prepare_holographic.py'],
+                   check=True, timeout=300)
     require(ensure_installed(entry) is False, 'Second check unexpectedly reinstalled provider')
     # Real PM no-op sync, without repair or any forced reinstall.
     sync_venv(explicit=True, project_root=SOURCE)
@@ -474,6 +481,63 @@ def integration(report):
     report['selected_venv_allocation'] = allocated_tree(selected)
     report['pm_runtime_facts'] = str(runtime_facts_path(SOURCE))
     report['legacy_schema_sha256'] = hashlib.sha256(LEGACY_SCHEMA.encode()).hexdigest()
+    expected_extras = {'all', 'acp', 'computer-use', 'doc-extract', 'google', 'telegram',
+                       'tts-premium', 'vertex', 'vision', 'voice', 'web', 'wecom', 'youtube'}
+    # Facts schema is the actual PM ledger; do not infer extras from imports.
+    from pm.lock import Facts
+    recorded = Facts(runtime_facts_path(SOURCE)).get('venv')
+    require(recorded is not None and set(recorded.get('extras', [])) == expected_extras,
+            'Plugin admission lost or changed baked feature selection')
+    report['baked_extras_preserved'] = sorted(expected_extras)
+    report['supervised_start_and_restart'] = check_supervised_restart(selected)
+
+
+def check_supervised_restart(selected):
+    """Actual start.sh on migrated synthetic state, twice, without any bot key."""
+    import secrets
+    import urllib.error
+    import urllib.request
+    from pm.environments import selected_venv
+    env = os.environ.copy()
+    env.update(ADMIN_PASSWORD=secrets.token_urlsafe(32), ADMIN_USERNAME='ci-check', PORT='18090')
+    results = []
+    for attempt in range(2):
+        log_path = FIXTURE / 'tmp' / f'supervisor-{attempt}.log'
+        with log_path.open('w+') as log:
+            process = subprocess.Popen(['/app/start.sh'], env=env, stdout=log, stderr=log)
+            try:
+                deadline = time.monotonic() + 120
+                while True:
+                    require(process.poll() is None, 'Supervised migrated startup exited')
+                    try:
+                        with urllib.request.urlopen('http://127.0.0.1:18090/api/health', timeout=3) as response:
+                            require(response.status == 200, 'Dashboard health failed')
+                        break
+                    except (OSError, urllib.error.URLError):
+                        require(time.monotonic() < deadline, 'Migrated dashboard startup timed out')
+                        time.sleep(1)
+                try:
+                    urllib.request.urlopen('http://127.0.0.1:18090/api/config', timeout=3).close()
+                except urllib.error.HTTPError as exc:
+                    require(exc.code in (401, 403), 'Unexpected protected-dashboard response')
+                else:
+                    raise RuntimeError('Dashboard configuration was accessible without authentication')
+                require(selected_venv(SOURCE) == selected, 'Startup unexpectedly replaced the PM generation')
+                results.append({'attempt': attempt + 1, 'health': 200, 'unauthenticated_config_blocked': True,
+                                'same_selected_environment': True})
+            except BaseException:
+                log.flush()
+                print(log_path.read_text()[-6000:], file=sys.stderr)
+                raise
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=25)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+                    raise RuntimeError('Supervisor did not stop cleanly')
+    return results
 
 
 def main():

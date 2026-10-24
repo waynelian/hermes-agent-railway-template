@@ -10,6 +10,8 @@ on:
       - supervisor.py
       - start.sh
       - test_supervisor.py
+      - prepare_holographic.py
+      - test_prepare_holographic.py
       - verify_holographic_migration.py
       - .github/workflows/validate-railway-image.yml
   workflow_dispatch:
@@ -27,6 +29,13 @@ jobs:
         run: python3 -m unittest -v test_supervisor.py
       - name: Build pinned image (no production credentials)
         run: docker build --platform linux/amd64 --progress=plain -t hermes-railway:check .
+      - name: Test pre-start migration safeguards in the image
+        run: |
+          docker run --rm --mount type=tmpfs,destination=/data \
+            --mount "type=bind,source=$PWD,target=/candidate,readonly" \
+            --workdir /candidate \
+            --entrypoint /usr/local/lib/hermes-agent/.venv/bin/python \
+            hermes-railway:check -B -m unittest -v test_prepare_holographic.py
       - name: Check a fresh mounted data directory
         run: |
           docker run --rm --mount type=tmpfs,destination=/data \

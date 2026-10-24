@@ -175,7 +175,7 @@ marker.write_text(json.dumps({
 marker.chmod(0o444)
 PY
 
-COPY supervisor.py start.sh /app/
+COPY supervisor.py start.sh prepare_holographic.py /app/
 RUN ln -s /usr/local/lib/hermes-agent/libexec/hermes /usr/local/bin/hermes \
  && chmod +x /app/start.sh \
  && mkdir -p /data/.hermes
